@@ -67,3 +67,20 @@ a { color: inherit; text-decoration: none; }
   .detail { grid-template-columns: 1fr; }
   .cart-table th:nth-child(2), .cart-table td:nth-child(2) { display: none; }
 }
+
+/* --- auth / mypage / status --- */
+.notice { background: #eff6ff; border: 1px solid #bfdbfe; padding: 10px 14px; border-radius: 8px; color: #1e40af; }
+.error { color: var(--danger); min-height: 1.2em; margin: 8px 0 0; font-size: .9rem; }
+.muted { color: var(--muted); font-size: .9rem; }
+.link { color: var(--accent); text-decoration: underline; }
+.admin-link { background: var(--fg); color: #fff; padding: 2px 10px; border-radius: 999px; font-size: .85rem; }
+.soldout { color: var(--danger); font-size: .8rem; }
+.low { color: #b45309; font-size: .8rem; }
+.stock { color: var(--muted); margin: 0; }
+.order { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
+.order-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.order ul { margin: 8px 0; padding-left: 20px; }
+.order-foot { font-size: .9rem; color: var(--muted); }
+.status { font-size: .8rem; padding: 2px 10px; border-radius: 999px; background: #e5e7eb; }
+.s-pending { background: #fef3c7; color: #92400e; } .s-paid { background: #dbeafe; color: #1e40af; } .s-shipped { background: #e0e7ff; color: #3730a3; }
+.s-completed { background: #dcfce7; color: #166534; } .s-cancelled { background: #fee2e2; color: #991b1b; }

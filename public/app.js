@@ -1,35 +1,38 @@
-const PRODUCTS = [
-  { id: 1, name: "ミニマルトートバッグ", cat: "バッグ", price: 4800, emoji: "👜", color: "#fde68a", desc: "キャンバス素材のシンプルなトート。A4がすっぽり入ります。" },
-  { id: 2, name: "レザーキーケース", cat: "小物", price: 3200, emoji: "🔑", color: "#fca5a5", desc: "本革製。使うほどに味が出る、長く付き合えるキーケース。" },
-  { id: 3, name: "セラミックマグ", cat: "キッチン", price: 1800, emoji: "☕", color: "#bfdbfe", desc: "手触りのいいマットな質感。電子レンジ・食洗機対応。" },
-  { id: 4, name: "オーガニックコットンTシャツ", cat: "アパレル", price: 3900, emoji: "👕", color: "#bbf7d0", desc: "肌に優しいオーガニックコットン100%。ユニセックス。" },
-  { id: 5, name: "ワイヤレスイヤホン", cat: "ガジェット", price: 9800, emoji: "🎧", color: "#ddd6fe", desc: "ノイズキャンセリング搭載。連続再生8時間。" },
-  { id: 6, name: "リネンエプロン", cat: "キッチン", price: 4200, emoji: "🧑‍🍳", color: "#fed7aa", desc: "麻100%の軽やかなエプロン。洗うほど柔らかく。" },
-  { id: 7, name: "ノートブック A5", cat: "文具", price: 980, emoji: "📓", color: "#e5e7eb", desc: "滑らかな書き心地の上質紙。方眼・192ページ。" },
-  { id: 8, name: "アロマキャンドル", cat: "インテリア", price: 2600, emoji: "🕯️", color: "#fbcfe8", desc: "大豆ワックス使用。ラベンダーの香り。燃焼時間約40時間。" },
-  { id: 9, name: "ステンレスボトル 500ml", cat: "キッチン", price: 3400, emoji: "🧴", color: "#a5f3fc", desc: "真空二重構造で保温・保冷。ワンタッチオープン。" },
-  { id: 10, name: "キャンバススニーカー", cat: "アパレル", price: 6500, emoji: "👟", color: "#fef3c7", desc: "軽くて歩きやすい定番スニーカー。" },
-  { id: 11, name: "スマートウォッチ", cat: "ガジェット", price: 18800, emoji: "⌚", color: "#c7d2fe", desc: "心拍・睡眠計測、通知対応。バッテリー7日間。" },
-  { id: 12, name: "ウールブランケット", cat: "インテリア", price: 7800, emoji: "🧣", color: "#fecaca", desc: "ふんわり暖かいウール混ブランケット。140×200cm。" },
-];
-const SHIPPING_FREE_OVER = 5000;
-const SHIPPING = 500;
-const yen = n => "¥" + n.toLocaleString("ja-JP");
+const SHIPPING_FREE_OVER = 5000, SHIPPING = 500;
+const yen = n => "¥" + Number(n).toLocaleString("ja-JP");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const STATUS_JA = { pending: "受注", paid: "入金済", shipped: "出荷済", completed: "完了", cancelled: "キャンセル" };
 
 // --- state ---
+let products = [];
+let user = null;
 let cart = JSON.parse(localStorage.getItem("cart") || "[]");
 let filter = "すべて";
+let redirectAfterLogin = null;
+
+const api = async (path, opts = {}) => {
+  const res = await fetch("/api" + path, { headers: { "Content-Type": "application/json" }, credentials: "same-origin", ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `エラー (${res.status})`);
+  return data;
+};
 const saveCart = () => localStorage.setItem("cart", JSON.stringify(cart));
-const cartCount = () => cart.reduce((s, i) => s + i.qty, 0);
-const subtotal = () => cart.reduce((s, i) => s + i.qty * PRODUCTS.find(p => p.id === i.id).price, 0);
+const findProduct = id => products.find(p => p.id === id);
+const cartLines = () => cart.map(i => ({ ...i, p: findProduct(i.id) })).filter(i => i.p);
+const cartCount = () => cartLines().reduce((s, i) => s + i.qty, 0);
+const subtotal = () => cartLines().reduce((s, i) => s + i.qty * i.p.price, 0);
 
 function addToCart(id, qty = 1) {
+  const p = findProduct(id); if (!p) return;
   const item = cart.find(i => i.id === id);
-  if (item) item.qty += qty; else cart.push({ id, qty });
+  const next = (item?.qty || 0) + qty;
+  if (next > p.stock) return toast(`在庫が足りません(残り${p.stock})`);
+  if (item) item.qty = next; else cart.push({ id, qty });
   saveCart(); updateBadge(); toast("カートに追加しました");
 }
 function setQty(id, qty) {
-  qty = Math.max(0, qty | 0);
+  const p = findProduct(id);
+  qty = Math.max(0, Math.min(qty | 0, p ? p.stock : 99));
   cart = qty === 0 ? cart.filter(i => i.id !== id) : cart.map(i => i.id === id ? { ...i, qty } : i);
   saveCart(); updateBadge(); render();
 }
@@ -37,67 +40,74 @@ function updateBadge() { document.getElementById("cart-count").textContent = car
 function toast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.classList.add("show");
-  clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove("show"), 1800);
+  clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove("show"), 2000);
+}
+function renderNav() {
+  const el = document.getElementById("nav-user");
+  el.innerHTML = user
+    ? `<a href="#mypage">${esc(user.name)} さん</a>${user.role === "admin" ? ' <a href="/admin.html" class="admin-link">管理画面</a>' : ""} <a href="#" data-logout>ログアウト</a>`
+    : `<a href="#login">ログイン</a>`;
 }
 
 // --- router ---
-function navigate(view, param) {
-  location.hash = param ? `${view}/${param}` : view;
-}
-function render() {
+const navigate = (view, param) => { location.hash = param ? `${view}/${param}` : view; };
+async function render() {
   const [view, param] = (location.hash.slice(1) || "home").split("/");
   const app = document.getElementById("app");
-  const views = { home, product, cart: cartView, checkout, thanks };
-  app.innerHTML = (views[view] || home)(param);
+  const views = { home, product, cart: cartView, checkout, thanks, login, register, mypage };
+  app.innerHTML = await (views[view] || home)(param);
   window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", render);
 
 // --- views ---
 function home() {
-  const cats = ["すべて", ...new Set(PRODUCTS.map(p => p.cat))];
-  const list = filter === "すべて" ? PRODUCTS : PRODUCTS.filter(p => p.cat === filter);
+  const cats = ["すべて", ...new Set(products.map(p => p.cat))];
+  const list = filter === "すべて" ? products : products.filter(p => p.cat === filter);
   return `
     <section class="hero"><h1>暮らしを少し良くするもの。</h1><p>日常に馴染む、長く使えるアイテムを集めました。</p></section>
-    <div class="filters">${cats.map(c => `<button class="${c === filter ? "active" : ""}" data-filter="${c}">${c}</button>`).join("")}</div>
+    <div class="filters">${cats.map(c => `<button class="${c === filter ? "active" : ""}" data-filter="${esc(c)}">${esc(c)}</button>`).join("")}</div>
     <div class="grid">${list.map(p => `
-      <div class="card" data-product="${p.id}">
-        <div class="img" style="background:${p.color}">${p.emoji}</div>
-        <div class="body"><span class="cat">${p.cat}</span><span class="name">${p.name}</span><span class="price">${yen(p.price)}</span></div>
+      <div class="card" data-product="${esc(p.id)}">
+        <div class="img" style="background:${esc(p.color)}">${esc(p.emoji)}</div>
+        <div class="body"><span class="cat">${esc(p.cat)}</span><span class="name">${esc(p.name)}</span>
+        <span class="price">${yen(p.price)}</span>${p.stock === 0 ? '<span class="soldout">在庫切れ</span>' : p.stock <= 5 ? `<span class="low">残り${p.stock}点</span>` : ""}</div>
       </div>`).join("")}</div>`;
 }
 function product(id) {
-  const p = PRODUCTS.find(x => x.id == id);
+  const p = findProduct(id);
   if (!p) return home();
   return `
     <a href="#home" class="back">← 商品一覧へ戻る</a>
     <div class="detail">
-      <div class="img" style="background:${p.color}">${p.emoji}</div>
+      <div class="img" style="background:${esc(p.color)}">${esc(p.emoji)}</div>
       <div>
-        <span class="cat">${p.cat}</span>
-        <h1>${p.name}</h1>
-        <p class="desc">${p.desc}</p>
+        <span class="cat">${esc(p.cat)}</span>
+        <h1>${esc(p.name)}</h1>
+        <p class="desc">${esc(p.desc)}</p>
         <div class="price">${yen(p.price)}<small style="font-size:.8rem;color:var(--muted)">(税込)</small></div>
-        <div class="qty">数量 <input type="number" id="qty" value="1" min="1" max="99"></div><br>
-        <button class="btn" data-add="${p.id}">カートに入れる</button>
+        <p class="stock">${p.stock === 0 ? "在庫切れ" : `在庫: ${p.stock}点`}</p>
+        <div class="qty">数量 <input type="number" id="qty" value="1" min="1" max="${p.stock}"></div><br>
+        <button class="btn" data-add="${esc(p.id)}" ${p.stock === 0 ? "disabled" : ""}>カートに入れる</button>
       </div>
     </div>`;
 }
 function cartView() {
-  if (!cart.length) return `<div class="empty"><p>カートは空です。</p><a href="#home" class="btn">買い物を続ける</a></div>`;
+  const lines = cartLines();
+  if (!lines.length) return `<div class="empty"><p>カートは空です。</p><a href="#home" class="btn">買い物を続ける</a></div>`;
   const sub = subtotal(); const ship = sub >= SHIPPING_FREE_OVER ? 0 : SHIPPING;
   return `
     <h1>カート</h1>
     <table class="cart-table">
       <thead><tr><th>商品</th><th>単価</th><th>数量</th><th class="num">小計</th><th></th></tr></thead>
-      <tbody>${cart.map(i => { const p = PRODUCTS.find(x => x.id === i.id); return `
+      <tbody>${lines.map(({ p, qty }) => `
         <tr>
-          <td><a href="#product/${p.id}">${p.emoji} ${p.name}</a></td>
+          <td><a href="#product/${esc(p.id)}">${esc(p.emoji)} ${esc(p.name)}</a></td>
           <td>${yen(p.price)}</td>
-          <td><button class="btn secondary sm" data-dec="${p.id}">−</button> ${i.qty} <button class="btn secondary sm" data-inc="${p.id}">＋</button></td>
-          <td class="num">${yen(p.price * i.qty)}</td>
-          <td><button class="btn danger" data-del="${p.id}">削除</button></td>
-        </tr>`; }).join("")}</tbody>
+          <td><button class="btn secondary sm" data-dec="${esc(p.id)}">−</button> ${qty} <button class="btn secondary sm" data-inc="${esc(p.id)}">＋</button></td>
+          <td class="num">${yen(p.price * qty)}</td>
+          <td><button class="btn danger" data-del="${esc(p.id)}">削除</button></td>
+        </tr>`).join("")}</tbody>
     </table>
     <div class="summary"><div class="summary-box">
       <div class="row"><span>商品合計</span><span>${yen(sub)}</span></div>
@@ -108,44 +118,108 @@ function cartView() {
     </div></div>`;
 }
 function checkout() {
-  if (!cart.length) return cartView();
+  if (!cartLines().length) return cartView();
+  if (!user) { redirectAfterLogin = "checkout"; return login("ご注文にはログインが必要です"); }
   const sub = subtotal(); const ship = sub >= SHIPPING_FREE_OVER ? 0 : SHIPPING;
   return `
     <a href="#cart" class="back">← カートへ戻る</a>
     <h1>お届け先・お支払い</h1>
     <form class="form" id="checkout-form">
-      <label>お名前</label><input required name="name" placeholder="山田 太郎">
-      <label>メールアドレス</label><input required type="email" name="email" placeholder="you@example.com">
+      <label>お名前</label><input required name="name" value="${esc(user.name)}">
       <label>郵便番号</label><input required name="zip" placeholder="100-0001">
       <label>住所</label><input required name="address" placeholder="東京都千代田区…">
       <label>お支払い方法</label>
       <select name="payment"><option>クレジットカード</option><option>コンビニ払い</option><option>代金引換</option></select>
       <p style="margin-top:16px">合計 <strong>${yen(sub + ship)}</strong>(送料 ${ship === 0 ? "無料" : yen(ship)})</p>
+      <p class="error" id="form-error"></p>
       <button class="btn" type="submit">注文を確定する</button>
     </form>`;
 }
 function thanks(orderId) {
-  return `<div class="thanks"><div class="big">🎉</div><h1>ご注文ありがとうございます</h1><p>注文番号: <strong>${orderId}</strong></p><p style="color:var(--muted)">※デモサイトのため実際の注文・決済は行われません。</p><a href="#home" class="btn">買い物を続ける</a></div>`;
+  return `<div class="thanks"><div class="big">🎉</div><h1>ご注文ありがとうございます</h1><p>注文番号: <strong>${esc(orderId)}</strong></p><p style="color:var(--muted)">※デモサイトのため実際の決済は行われません。</p><a href="#mypage" class="btn secondary">注文履歴を見る</a> <a href="#home" class="btn">買い物を続ける</a></div>`;
+}
+function login(message) {
+  if (user) return mypage();
+  return `
+    <h1>ログイン</h1>
+    ${message ? `<p class="notice">${esc(message)}</p>` : ""}
+    <form class="form" id="login-form">
+      <label>メールアドレス</label><input required type="email" name="email" autocomplete="email">
+      <label>パスワード</label><input required type="password" name="password" autocomplete="current-password">
+      <p class="error" id="form-error"></p>
+      <button class="btn" type="submit">ログイン</button>
+      <p class="muted">アカウントをお持ちでない方は <a href="#register" class="link">新規登録</a></p>
+    </form>`;
+}
+function register() {
+  if (user) return mypage();
+  return `
+    <h1>新規登録</h1>
+    <form class="form" id="register-form">
+      <label>お名前</label><input required name="name" autocomplete="name">
+      <label>メールアドレス</label><input required type="email" name="email" autocomplete="email">
+      <label>パスワード(8文字以上)</label><input required type="password" name="password" minlength="8" autocomplete="new-password">
+      <p class="error" id="form-error"></p>
+      <button class="btn" type="submit">登録する</button>
+      <p class="muted">既にアカウントをお持ちの方は <a href="#login" class="link">ログイン</a></p>
+    </form>`;
+}
+async function mypage() {
+  if (!user) { redirectAfterLogin = "mypage"; return login(); }
+  let orders = [];
+  try { ({ orders } = await api("/orders")); } catch (e) { return `<p class="error">${esc(e.message)}</p>`; }
+  return `
+    <h1>マイページ</h1>
+    <div class="form" style="margin-bottom:24px"><strong>${esc(user.name)}</strong><br><span class="muted">${esc(user.email)}</span></div>
+    <h2>注文履歴</h2>
+    ${orders.length ? orders.map(o => `
+      <div class="order">
+        <div class="order-head"><span><strong>${esc(o.id)}</strong> <span class="muted">${new Date(o.createdAt).toLocaleString("ja-JP")}</span></span><span class="status s-${esc(o.status)}">${STATUS_JA[o.status] || esc(o.status)}</span></div>
+        <ul>${o.items.map(l => `<li>${esc(l.emoji)} ${esc(l.name)} × ${l.qty} <span class="muted">${yen(l.price * l.qty)}</span></li>`).join("")}</ul>
+        <div class="order-foot">合計 <strong>${yen(o.total)}</strong>(送料 ${o.shippingFee ? yen(o.shippingFee) : "無料"}) ・ ${esc(o.payment)} ・ ${esc(o.shipping.address)}</div>
+      </div>`).join("") : `<p class="muted">まだ注文はありません。</p>`}`;
 }
 
 // --- events ---
-document.addEventListener("click", e => {
-  const el = e.target.closest("[data-view],[data-filter],[data-product],[data-add],[data-inc],[data-dec],[data-del]");
+document.addEventListener("click", async e => {
+  const el = e.target.closest("[data-filter],[data-product],[data-add],[data-inc],[data-dec],[data-del],[data-logout]");
   if (!el) return;
-  if (el.dataset.view) { e.preventDefault(); navigate(el.dataset.view); }
-  else if (el.dataset.filter) { filter = el.dataset.filter; render(); }
-  else if (el.dataset.product) navigate("product", el.dataset.product);
-  else if (el.dataset.add) addToCart(+el.dataset.add, +document.getElementById("qty").value || 1);
-  else if (el.dataset.inc) setQty(+el.dataset.inc, cart.find(i => i.id == el.dataset.inc).qty + 1);
-  else if (el.dataset.dec) setQty(+el.dataset.dec, cart.find(i => i.id == el.dataset.dec).qty - 1);
-  else if (el.dataset.del) setQty(+el.dataset.del, 0);
+  const d = el.dataset;
+  if (d.filter) { filter = d.filter; render(); }
+  else if (d.product) navigate("product", d.product);
+  else if (d.add) addToCart(d.add, +document.getElementById("qty").value || 1);
+  else if (d.inc) setQty(d.inc, cart.find(i => i.id === d.inc).qty + 1);
+  else if (d.dec) setQty(d.dec, cart.find(i => i.id === d.dec).qty - 1);
+  else if (d.del) setQty(d.del, 0);
+  else if ("logout" in d) { e.preventDefault(); await api("/auth/logout", { method: "POST" }); user = null; renderNav(); toast("ログアウトしました"); navigate("home"); }
 });
-document.addEventListener("submit", e => {
-  if (e.target.id !== "checkout-form") return;
-  e.preventDefault();
-  const orderId = "BD-" + Date.now().toString(36).toUpperCase();
-  cart = []; saveCart(); updateBadge();
-  navigate("thanks", orderId);
+document.addEventListener("submit", async e => {
+  const f = e.target; e.preventDefault();
+  const data = Object.fromEntries(new FormData(f));
+  const err = f.querySelector("#form-error"); err.textContent = "";
+  const btn = f.querySelector("button[type=submit]"); btn.disabled = true;
+  try {
+    if (f.id === "login-form" || f.id === "register-form") {
+      ({ user } = await api(f.id === "login-form" ? "/auth/login" : "/auth/register", { method: "POST", body: data }));
+      renderNav(); toast(f.id === "login-form" ? "ログインしました" : "登録が完了しました");
+      const next = redirectAfterLogin || "home"; redirectAfterLogin = null;
+      if (location.hash.slice(1) === next) render(); else navigate(next);
+    } else if (f.id === "checkout-form") {
+      const { order } = await api("/orders", { method: "POST", body: { items: cart, shipping: { name: data.name, zip: data.zip, address: data.address }, payment: data.payment } });
+      cart = []; saveCart(); updateBadge();
+      await loadProducts();
+      navigate("thanks", order.id);
+    }
+  } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
 });
 
-updateBadge(); render();
+async function loadProducts() { ({ products } = await api("/products")); }
+(async () => {
+  try {
+    const [, me] = await Promise.all([loadProducts(), api("/auth/me")]);
+    user = me.user;
+  } catch (e) { document.getElementById("app").innerHTML = `<p class="error">読み込みに失敗しました: ${esc(e.message)}</p>`; return; }
+  // Drop cart lines whose product disappeared, clamp to stock.
+  cart = cartLines().map(({ id, qty, p }) => ({ id, qty: Math.min(qty, p.stock) })).filter(i => i.qty > 0); saveCart();
+  renderNav(); updateBadge(); render();
+})();
